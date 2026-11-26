@@ -1,0 +1,7 @@
+name: fuzzy
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=2,<3
+  - matplotlib-base>=3.9,<4
