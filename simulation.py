@@ -9,6 +9,7 @@ from fis import BUFFER_MAX, RATES, infer
 
 SEGMENT_SECONDS = 4.0
 SEGMENTS = 45  # 3 minuty filmu
+DEFAULT_FIXED_RATE = 2.0
 # (początek przedziału czasu ściennego [s], przepustowość [Mb/s]).
 # Ostatnia wartość obowiązuje do końca odtwarzania.
 PROFILES = {
@@ -33,10 +34,12 @@ def download_time(profile, start, megabits):
     raise ValueError("Profil musi kończyć się dodatnią przepustowością.")
 
 
-POLICIES = {
-    "FIS": lambda throughput, buffer: infer(throughput, buffer).rate,
-    "Stałe 2": lambda throughput, buffer: 2.0,
-}
+def policies(fixed_rate=DEFAULT_FIXED_RATE, *, all_fixed=False):
+    result = {"FIS": lambda throughput, buffer: infer(throughput, buffer).rate}
+    rates = RATES if all_fixed else (fixed_rate,)
+    for rate in rates:
+        result[f"Stałe {rate:g}"] = lambda throughput, buffer, rate=rate: rate
+    return result
 
 
 @dataclass(frozen=True)

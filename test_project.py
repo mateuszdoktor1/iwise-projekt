@@ -9,7 +9,10 @@ import numpy as np
 
 import fis
 import profiles
-from simulation import POLICIES, PROFILES, SEGMENT_SECONDS, download_time, metrics, simulate
+from simulation import PROFILES, SEGMENT_SECONDS, download_time, metrics, policies, simulate
+
+
+POLICIES = policies()
 
 
 class FuzzyTests(unittest.TestCase):
@@ -63,19 +66,28 @@ class ProfileTests(unittest.TestCase):
         self.enterContext(patch.object(profiles, "PROFILE_DIR", self.directory))
 
     def test_save_list_and_load(self):
-        path = profiles.add_profile("Mój-test", ["0:5", "20:1,2", "55:4"])
+        path = profiles.add_profile("Mój-test", ["0:5", "20:1,2", "55:4"], "4")
         self.assertTrue(path.is_file())
         self.assertIn("mój-test", profiles.profile_names())
-        self.assertEqual(profiles.load_profile("MÓJ-test"), [(0, 5), (20, 1.2), (55, 4)])
-        self.assertEqual(len(simulate(profiles.load_profile("mój-test"), POLICIES["FIS"])), 45)
+        profile = profiles.load_profile("MÓJ-test")
+        self.assertEqual(profile.points, [(0, 5), (20, 1.2), (55, 4)])
+        self.assertEqual(profile.fixed_rate, 4)
+        log = simulate(profile.points, policies(profile.fixed_rate)["Stałe 4"], count=3)
+        self.assertEqual([segment.rate for segment in log], [0.5, 4, 4])
+
+    def test_legacy_profile_uses_default_fixed_rate(self):
+        (self.directory / "starszy.txt").write_text("0:5\n20:1.2\n", encoding="utf-8")
+        profile = profiles.load_profile("starszy")
+        self.assertEqual(profile.points, [(0, 5), (20, 1.2)])
+        self.assertEqual(profile.fixed_rate, 2)
 
     def test_conflicts_preserve_profiles(self):
         profiles.add_profile("nowy", ["0:1"])
         for name in ("Nowy", "SPADEK"):
             with self.assertRaises(ValueError):
                 profiles.add_profile(name, ["0:6"])
-        self.assertEqual(profiles.load_profile("nowy"), [(0, 1)])
-        self.assertEqual(profiles.load_profile("spadek"), PROFILES["spadek"])
+        self.assertEqual(profiles.load_profile("nowy").points, [(0, 1)])
+        self.assertEqual(profiles.load_profile("spadek").points, PROFILES["spadek"])
 
     def test_invalid_arguments_leave_no_file(self):
         for points in ([], ["0-5"], ["1:5"], ["0:0"], ["0:5", "0:2"], ["0:inf"], ["0:2", "nan:2"]):
@@ -83,12 +95,21 @@ class ProfileTests(unittest.TestCase):
                 profiles.add_profile("test", points)
         with self.assertRaises(ValueError):
             profiles.add_profile("../poza", ["0:3"])
+        with self.assertRaisesRegex(ValueError, "stały wariant"):
+            profiles.add_profile("test", ["0:3"], "3")
         self.assertEqual(list(self.directory.iterdir()), [])
         with self.assertRaisesRegex(ValueError, "Nie znaleziono"):
             profiles.load_profile("brak")
 
 
 class PlaybackTests(unittest.TestCase):
+    def test_all_fixed_policies_use_their_own_rates(self):
+        variants = policies(all_fixed=True)
+        self.assertEqual(len(variants), 5)
+        for rate in (0.5, 1, 2, 4):
+            log = simulate([(0, 6)], variants[f"Stałe {rate:g}"], count=2)
+            self.assertEqual([segment.rate for segment in log], [0.5, rate])
+
     def test_download_across_changes_and_at_boundary(self):
         profile = [(0, 4), (2, 1), (4, 2)]
         self.assertEqual(download_time(profile, 1, 10), 5)

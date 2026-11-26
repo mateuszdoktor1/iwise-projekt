@@ -11,8 +11,8 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 
 import fis
-from profiles import add_profile, load_profile, profile_name, profile_names
-from simulation import POLICIES, PROFILES, SEGMENT_SECONDS, metrics, simulate
+from profiles import add_profile, load_profile, parse_fixed_rate, profile_name, profile_names
+from simulation import DEFAULT_FIXED_RATE, PROFILES, SEGMENT_SECONDS, metrics, policies, simulate
 
 OUT = Path(__file__).resolve().parent / "wyniki"
 COLORS = ("#315481", "#0d8176", "#b34e26", "#714c86")
@@ -95,59 +95,112 @@ def buffer_path(log):
     return times + [log[-1].end + log[-1].buffer_after], levels + [0.0]
 
 
-def trace_plot(name, profile, log, fixed):
-    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(10, 5.6), layout="constrained")
-    finish = max(run[-1].end + run[-1].buffer_after for run in (log, fixed))
+def plot_throughput(ax, profile, log, finish):
     points = [(t, c) for t, c in profile if t < finish]
     points.append((finish, points[-1][1]))
     times, speeds = zip(*points)
-    axes[0].step(times, speeds, where="post", color=COLORS[0], label="Rzeczywiste łącze")
-    axes[0].scatter([s.start for s in log[1:]], [s.estimated_speed for s in log[1:]],
-                    s=10, color=COLORS[2], label="Ostatni pomiar FIS")
-    axes[0].legend(loc="lower right", fontsize=8, ncol=2)
-    axes[0].set_ylabel("Łącze [Mb/s]")
+    ax.step(times, speeds, where="post", color=COLORS[0], label="Rzeczywiste łącze")
+    ax.scatter([s.start for s in log[1:]], [s.estimated_speed for s in log[1:]],
+               s=10, color=COLORS[2], label="Ostatni pomiar FIS")
+    ax.legend(loc="lower right", fontsize=8, ncol=2)
+    ax.set_ylabel("Łącze [Mb/s]")
+
+
+def plot_buffers(ax, log, fixed, fixed_label):
     for s in fixed:
         if s.stall > 1e-9:
-            axes[1].axvspan(s.end - s.stall, s.end, color="#e57865", alpha=.3)
-    axes[1].plot(*buffer_path(fixed), color=COLORS[2], alpha=.8, linestyle="--", label="Stałe 2 Mb/s")
-    axes[1].plot(*buffer_path(log), color=COLORS[1], label="FIS")
-    axes[1].legend(loc="lower right", ncol=2, fontsize=8)
-    axes[1].set_ylabel("Bufor [s]")
-    axes[2].step([s.start for s in log] + [log[-1].end], [s.rate for s in log] + [log[-1].rate],
-                 where="post", color=COLORS[0])
-    axes[2].set(yticks=fis.RATES, ylabel="Wariant FIS\n[Mb/s]", xlabel="Czas od pierwszego żądania [s]")
-    axes[0].set_title(f"Profil {name}  |  czerwone pola oznaczają postoje przy stałych 2 Mb/s")
+            ax.axvspan(s.end - s.stall, s.end, color="#e57865", alpha=.3)
+    ax.plot(*buffer_path(fixed), color=COLORS[2], alpha=.8, linestyle="--", label=f"{fixed_label} Mb/s")
+    ax.plot(*buffer_path(log), color=COLORS[1], label="FIS")
+    ax.legend(loc="upper right", ncol=2, fontsize=8)
+    ax.set_ylabel("Bufor [s]")
+
+
+def plot_fis_rate(ax, log):
+    ax.step([s.start for s in log] + [log[-1].end], [s.rate for s in log] + [log[-1].rate],
+            where="post", color=COLORS[0])
+    ax.set(yticks=fis.RATES, ylabel="Wariant FIS\n[Mb/s]", xlabel="Czas od pierwszego żądania [s]")
+
+
+def trace_plot(name, profile, log, fixed, fixed_label):
+    fig, axes = plt.subplots(3, 1, sharex=True, figsize=(10, 5.6), layout="constrained")
+    finish = max(run[-1].end + run[-1].buffer_after for run in (log, fixed))
+    plot_throughput(axes[0], profile, log, finish)
+    plot_buffers(axes[1], log, fixed, fixed_label)
+    plot_fis_rate(axes[2], log)
+    axes[0].set_title(f"Profil {name}  |  czerwone pola oznaczają przerwy strategii stałej")
     for ax in axes:
         ax.grid(alpha=.2)
         ax.set_xlim(0, finish)
     save(fig, f"przebieg_{name}.png")
 
 
-def compare(profiles):
+def all_fixed_plot(name, profile, logs):
+    fig = plt.figure(figsize=(12, 8), layout="constrained")
+    grid = fig.add_gridspec(4, 2, height_ratios=(1, 1.5, 1.5, 1))
+    log = logs["FIS"]
+    finish = max(run[-1].end + run[-1].buffer_after for run in logs.values())
+    fis_stall = f"{metrics(log)['zatrzymania_s']:.2f}".replace(".", ",")
+    fig.suptitle(f"Profil {name} · FIS i cztery stałe warianty filmu\n"
+                 f"Przerwy FIS {fis_stall} s · czerwone pola oznaczają przerwy wariantu stałego")
+
+    network = fig.add_subplot(grid[0, :])
+    plot_throughput(network, profile, log, finish)
+    fixed_runs = [(label, run) for label, run in logs.items() if label != "FIS"]
+    for i, (label, fixed) in enumerate(fixed_runs):
+        ax = fig.add_subplot(grid[1 + i // 2, i % 2], sharex=network)
+        title = label.replace(".", ",")
+        stall = f"{metrics(fixed)['zatrzymania_s']:.2f}".replace(".", ",")
+        plot_buffers(ax, log, fixed, title)
+        ax.set(title=f"FIS / {title} Mb/s · przerwy wariantu stałego {stall} s",
+               ylim=(0, fis.BUFFER_MAX + SEGMENT_SECONDS))
+
+    rate_ax = fig.add_subplot(grid[3, :], sharex=network)
+    plot_fis_rate(rate_ax, log)
+    network.set_xlim(0, finish)
+    for ax in fig.axes:
+        ax.grid(alpha=.2)
+    save(fig, f"porownanie_{name}.png")
+
+
+def compare(profiles, fixed_rate=None, *, all_fixed=False):
     rows = []
     width = max(10, max(map(len, profiles)))
-    print(f"\n{'Profil':{width}} Strategia  Start [s]  Zatrzymania [s]  Średnia [Mb/s]  Zmiany")
+    print(f"\n{'Profil':{width}} {'Strategia':10} Start [s]  Zatrzymania [s]  Średnia [Mb/s]  Zmiany")
     for name, profile in profiles.items():
-        logs = {label: simulate(profile, policy) for label, policy in POLICIES.items()}
+        rate = profile.fixed_rate if fixed_rate is None else fixed_rate
+        logs = {label: simulate(profile.points, policy)
+                for label, policy in policies(rate, all_fixed=all_fixed).items()}
         for policy_name, log in logs.items():
             m = metrics(log)
-            print(f"{name:{width}} {policy_name:8} {m['start_s']:9.2f} {m['zatrzymania_s']:16.2f}"
+            print(f"{name:{width}} {policy_name:10} {m['start_s']:9.2f} {m['zatrzymania_s']:16.2f}"
                   f" {m['srednia_Mb_s']:15.2f} {m['zmiany']:7}")
             rows.append({"profil": name, "strategia": policy_name, **m})
-        trace_plot(name, profile, logs["FIS"], logs["Stałe 2"])
+        if all_fixed:
+            all_fixed_plot(name, profile.points, logs)
+        else:
+            fixed_label = f"Stałe {rate:g}"
+            trace_plot(name, profile.points, logs["FIS"], logs[fixed_label], fixed_label)
     return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description="Dobór przepływności segmentu wideo")
     sub = parser.add_subparsers(dest="command")
-    demo = sub.add_parser("demo", help="Jedna decyzja i porównanie FIS ze stałymi 2 Mb/s")
+    demo = sub.add_parser("demo", help="Jedna decyzja i porównanie FIS ze stałą jakością")
     demo.add_argument("profil", nargs="?", default="spadek", help="Nazwa z polecenia 'profile'")
+    demo_options = demo.add_mutually_exclusive_group()
+    demo_options.add_argument("--stale", metavar="MB/S",
+                              help="Stały wariant filmu dla tego uruchomienia (0.5, 1, 2 lub 4)")
+    demo_options.add_argument("--wszystkie", action="store_true",
+                              help="Pokaż FIS i wszystkie cztery stałe warianty na jednym PNG")
     sub.add_parser("profile", help="Pokaż nazwy profili wbudowanych i zapisanych")
     add = sub.add_parser("dodaj-profil", help="Zapisz własny profil łącza",
                          epilog="Przykład: python main.py dodaj-profil moj 0:5 20:1.2 55:4")
     add.add_argument("nazwa")
     add.add_argument("punkty", nargs="+", metavar="CZAS:MB/S", help="Czas od początku [s] i przepustowość [Mb/s]")
+    add.add_argument("--stale", metavar="MB/S", default=DEFAULT_FIXED_RATE,
+                     help="Zapisz stały wariant filmu (0.5, 1, 2 lub 4, domyślnie 2)")
     case = sub.add_parser("decyzja", help="Prześledź reguły dla dwóch liczb")
     case.add_argument("pomiar", type=float)
     case.add_argument("bufor", type=float)
@@ -164,7 +217,7 @@ def run(args):
         for name in profile_names():
             print(f"{name} ({'wbudowany' if name in PROFILES else 'własny'})")
     elif args.command == "dodaj-profil":
-        path = add_profile(args.nazwa, args.punkty)
+        path = add_profile(args.nazwa, args.punkty, args.stale)
         print(f"Zapisano: {path}\nUruchom: python main.py demo {path.stem}")
     elif args.command == "decyzja":
         example(args.pomiar, args.bufor)
@@ -180,10 +233,14 @@ def run(args):
     else:
         name = profile_name(getattr(args, "profil", "spadek"))
         profile = load_profile(name)
+        option = getattr(args, "stale", None)
+        fixed_rate = parse_fixed_rate(option) if option is not None else None
+        all_fixed = getattr(args, "wszystkie", False)
         print("Przykład pojedynczej decyzji (te same wejścia dla każdego demo)")
         example(4, 10)
-        compare({name: profile})
-        print(f"Wykres: {OUT / f'przebieg_{name}.png'}")
+        compare({name: profile}, fixed_rate, all_fixed=all_fixed)
+        prefix = "porownanie" if all_fixed else "przebieg"
+        print(f"Wykres: {OUT / f'{prefix}_{name}.png'}")
 
 
 if __name__ == "__main__":
