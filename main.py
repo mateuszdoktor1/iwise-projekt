@@ -141,7 +141,7 @@ def compare(profiles):
 def main():
     parser = argparse.ArgumentParser(description="Dobór przepływności segmentu wideo")
     sub = parser.add_subparsers(dest="command")
-    demo = sub.add_parser("demo", help="Jedna decyzja i porównanie trzech strategii")
+    demo = sub.add_parser("demo", help="Jedna decyzja i porównanie FIS ze stałymi 2 Mb/s")
     demo.add_argument("profil", nargs="?", default="spadek", help="Nazwa z polecenia 'profile'")
     sub.add_parser("profile", help="Pokaż nazwy profili wbudowanych i zapisanych")
     add = sub.add_parser("dodaj-profil", help="Zapisz własny profil łącza",

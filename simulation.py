@@ -5,7 +5,7 @@ from itertools import pairwise
 from math import inf, isfinite
 from statistics import mean
 
-from fis import BUFFER_MAX, RATES, available_rate, infer
+from fis import BUFFER_MAX, RATES, infer
 
 SEGMENT_SECONDS = 4.0
 SEGMENTS = 45  # 3 minuty filmu
@@ -33,16 +33,8 @@ def download_time(profile, start, megabits):
     raise ValueError("Profil musi kończyć się dodatnią przepustowością.")
 
 
-def threshold_rate(throughput, buffer):
-    chosen = available_rate(0.8 * throughput)
-    if buffer <= 4:
-        return RATES[max(0, RATES.index(chosen) - 1)]
-    return chosen
-
-
 POLICIES = {
     "FIS": lambda throughput, buffer: infer(throughput, buffer).rate,
-    "Próg": threshold_rate,
     "Stałe 2": lambda throughput, buffer: 2.0,
 }
 

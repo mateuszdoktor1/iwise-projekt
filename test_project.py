@@ -9,7 +9,7 @@ import numpy as np
 
 import fis
 import profiles
-from simulation import POLICIES, PROFILES, SEGMENT_SECONDS, download_time, metrics, simulate, threshold_rate
+from simulation import POLICIES, PROFILES, SEGMENT_SECONDS, download_time, metrics, simulate
 
 
 class FuzzyTests(unittest.TestCase):
@@ -55,8 +55,6 @@ class FuzzyTests(unittest.TestCase):
         self.assertEqual(fis.available_rate(3.1), 2)
         self.assertEqual(fis.available_rate(0.3), 0.5)
         self.assertEqual(fis.available_rate(4 - 1e-15), 4)
-        self.assertEqual(threshold_rate(5, 4), 2)
-        self.assertEqual(threshold_rate(5, 8), 4)
 
 
 class ProfileTests(unittest.TestCase):
